@@ -1,0 +1,18 @@
+{
+  "name": "ruby-lsp-marketplace",
+  "owner": {
+    "name": "Benjamin Jackson",
+    "email": "ben@hearmeout.co"
+  },
+  "plugins": [
+    {
+      "name": "ruby-lsp",
+      "source": "./",
+      "description": "Ruby LSP integration for Claude Code",
+      "version": "1.0.0",
+      "author": {
+        "name": "Benjamin Jackson"
+      }
+    }
+  ]
+}

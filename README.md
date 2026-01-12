@@ -15,3 +15,10 @@ Connects Claude Code to the Ruby LSP server, providing real-time code intelligen
 ```bash
 gem install ruby-lsp
 ```
+
+## Installation
+
+```bash
+/plugin marketplace add benjaminjackson/ruby-lsp
+/plugin install ruby-lsp@ruby-lsp-marketplace
+```
