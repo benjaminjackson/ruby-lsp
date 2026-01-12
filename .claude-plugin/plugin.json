@@ -1,0 +1,6 @@
+{
+  "name": "ruby-lsp",
+  "version": "1.0.0",
+  "description": "Ruby LSP integration for Claude Code",
+  "lspServers": "./.lsp.json"
+}
