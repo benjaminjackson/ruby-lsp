@@ -13,39 +13,278 @@ This project has Ruby LSP (shopify/ruby-lsp) integration enabled. Use the LSP to
 
 **Need to know what methods exist?** → **documentSymbol** ✅
 **Need to understand class/module structure?** → **documentSymbol** ✅
-**Need method signatures or parameters?** → **documentSymbol** ✅
+**Need method signatures or parameters?** → **hover** ✅ (NOT documentSymbol - it only gives names)
 **Need to see instance variables?** → **documentSymbol** ✅
 **Need file overview or high-level structure?** → **documentSymbol** ✅
 **Need to find where a method is defined?** → **goToDefinition** ✅
 **Need to see where a method is called?** → **findReferences** ✅
+**Need method documentation?** → **hover** ✅
 
 **Only use Read when:**
 - Need specific implementation details in method bodies
 - Need to see actual code logic
 - Need comments, strings, or non-structural content
 
-**Key Rule:** NEVER use Read to get structural information. ALWAYS use LSP operations first.
+**Key Rule:** NEVER use Read to get structural information or method signatures. ALWAYS use LSP operations first.
 
-**The documentSymbol operation provides:**
-- All classes and modules
-- All methods with line numbers
-- All instance variables
-- Hierarchical structure
-- Instant response without loading large files
+## Quick Reference
 
-**Example Flow:**
+| What You Need | Use This | NOT This |
+|---------------|----------|----------|
+| List of methods in file | documentSymbol | Read entire file |
+| Method signature with params | hover | Read entire file |
+| Where method is called | findReferences | Grep for method name |
+| Where method is defined | goToDefinition | Grep for "def method" |
+| Find class across project | workspaceSymbol | Glob + Grep |
+| What calls this method | incomingCalls | Grep + manual analysis |
+| What this method calls | outgoingCalls | Read method body |
+| Method documentation | hover | Read file comments |
+
+## Common Workflows
+
+### Getting Method Signatures (Most Common Mistake)
+
+❌ **Wrong - Reading entire file for signatures:**
+```
+Task: Get method signatures from generate_briefs.rb
+Step 1: [Uses documentSymbol - gets method list]
+Step 2: [Reads entire 1183-line file] ← WRONG!
+```
+
+✅ **Correct - documentSymbol + hover:**
+```
+Task: Get method signatures from generate_briefs.rb
+Step 1: [Uses documentSymbol - gets method list with line numbers]
+Step 2: [Uses hover on each method - gets full signature with parameters]
+Result: Full signatures without reading entire file
+```
+
+### Understanding File Structure
 
 ❌ **Wrong:**
 ```
-Task: Understand what methods are available in generate_briefs.rb
-Assistant: [Reads entire 1183-line file to find method definitions]
+Task: Understand what's in this Ruby file
+Assistant: [Reads entire file and manually parses for classes/methods]
 ```
 
 ✅ **Correct:**
 ```
-Task: Understand what methods are available in generate_briefs.rb
-Assistant: [Uses LSP documentSymbol operation]
-Assistant: [Gets structured list of 58 symbols instantly]
+Task: Understand what's in this Ruby file
+Assistant: [Uses documentSymbol]
+Assistant: [Gets hierarchical structure: classes, modules, methods, instance variables]
+```
+
+### Finding Where Methods Are Called
+
+❌ **Wrong:**
+```
+Task: Find all places where process_payment is called
+Assistant: [Uses Grep to search for "process_payment" as text]
+```
+
+✅ **Correct:**
+```
+Task: Find all places where process_payment is called
+Assistant: [Uses findReferences]
+Assistant: [Gets semantic matches - understands Ruby scope and method calls]
+```
+
+## Detailed Operation Guide with Examples
+
+### 1. documentSymbol - "What's in this file?"
+
+**Use when you need:**
+- List of all methods in a file
+- Class and module structure
+- Overview before diving deeper
+
+**Returns:**
+- Method names (NOT full signatures)
+- Line numbers for each symbol
+- Hierarchical structure
+
+**Example scenarios:**
+```
+Context: User asks "What methods are available in payment_processor.rb?"
+Step 1: LSP operation="documentSymbol" filePath="/path/payment_processor.rb" line=1 character=1
+Result: Gets list: process_payment, validate_card, charge_card, refund_payment
+```
+
+```
+Context: Need to understand a new file before modifying it
+Step 1: LSP operation="documentSymbol" to see all classes and methods
+Step 2: Use hover on interesting methods to learn more
+Step 3: Use Read only if need to see implementation
+```
+
+### 2. hover - "What's the signature? What does this do?"
+
+**Use when you need:**
+- Full method signature with parameters
+- Method documentation
+- Parameter types and return values
+
+**Returns:**
+- Complete signature: `def method_name(param1, param2, options = {})`
+- Documentation comments
+- Parameter info
+
+**Example scenarios:**
+```
+Context: After documentSymbol shows process_payment exists, need to know how to call it
+Step 1: LSP operation="documentSymbol" (got line number: 45)
+Step 2: LSP operation="hover" filePath="/path/file.rb" line=45 character=1
+Result: Full signature with all parameters
+```
+
+```
+Context: About to call a method, need to know what parameters it expects
+Use: hover on the method definition
+Get: def process_payment(amount, currency = 'USD', metadata = {})
+```
+
+### 3. findReferences - "Where is this used?"
+
+**Use when you need:**
+- All places a method is called
+- All uses of a class or variable
+- Impact analysis before refactoring
+
+**Returns:**
+- Every location where symbol is referenced
+- Semantic matches (not string search)
+
+**Example scenarios:**
+```
+Context: About to rename or refactor process_payment method
+Step 1: LSP operation="goToDefinition" to find definition
+Step 2: LSP operation="findReferences" at definition location
+Result: All 23 call sites across project
+```
+
+```
+Context: User asks "Where is validate_card called?"
+Use: findReferences at the method definition
+Get: All call sites with file paths and line numbers
+NOT: Grep search that would also match string literals
+```
+
+### 4. goToDefinition - "Where is this defined?"
+
+**Use when you need:**
+- Jump to where method/class is defined
+- Find definition of inherited method
+- Navigate from usage to definition
+
+**Returns:**
+- Exact file path and line number of definition
+- Works with inheritance and mixins
+
+**Example scenarios:**
+```
+Context: Looking at code that calls User.authenticate, need to see how it's implemented
+Step 1: LSP operation="goToDefinition" on authenticate call site
+Result: Jumps to exact definition, even if in parent class or mixin
+```
+
+```
+Context: User asks "Where is the charge_card method defined?"
+Use: goToDefinition (don't use Grep to search for "def charge_card")
+Get: Exact location, including inherited methods from superclasses
+```
+
+### 5. workspaceSymbol - "Find this across entire project"
+
+**Use when you need:**
+- Find classes/methods across whole codebase
+- Locate symbol without knowing which file
+- Broad search for symbols
+
+**Returns:**
+- Matching symbols from entire workspace
+
+**Example scenarios:**
+```
+Context: User asks "Where is the PaymentProcessor class?"
+Use: workspaceSymbol with query "PaymentProcessor"
+Get: All matching classes across project
+NOT: Glob + Grep combination
+```
+
+```
+Context: Need to find all payment-related classes
+Use: workspaceSymbol with query "payment"
+Get: PaymentProcessor, PaymentGateway, PaymentMethod, etc.
+```
+
+### 6. goToImplementation - "What implements this?"
+
+**Use when you need:**
+- Find concrete implementations of abstract method
+- See all subclass implementations
+- Navigate from interface to implementation
+
+**Example scenarios:**
+```
+Context: Looking at abstract process method, need to see actual implementations
+Use: goToImplementation on abstract method
+Get: All concrete implementations in subclasses
+```
+
+### 7. incomingCalls - "What calls this method?"
+
+**Use when you need:**
+- Understand dependencies on a method
+- See who calls this ("who calls me?")
+- Analyze impact before changes
+
+**Example scenarios:**
+```
+Context: About to change process_payment signature, need to know all callers
+Use: incomingCalls on process_payment definition
+Get: All methods that call process_payment
+```
+
+```
+Context: User asks "What calls the validate_card method?"
+Use: incomingCalls (not findReferences - more structured for method calls)
+Get: Organized list of caller methods with context
+```
+
+### 8. outgoingCalls - "What does this method call?"
+
+**Use when you need:**
+- See method dependencies ("what do I call?")
+- Understand method flow
+- Analyze downstream impact
+
+**Example scenarios:**
+```
+Context: Need to understand what process_payment depends on
+Use: outgoingCalls on process_payment
+Get: List of methods it calls: validate_card, charge_card, send_receipt
+```
+
+```
+Context: Analyzing method to understand its behavior before modifying
+Step 1: hover to see signature
+Step 2: outgoingCalls to see what it calls
+Step 3: incomingCalls to see who calls it
+Result: Complete understanding without reading implementation
+```
+
+### 9. prepareCallHierarchy - "Show me the call chain"
+
+**Use when you need:**
+- Understand call hierarchy
+- See method call relationships
+- Analyze call chains
+
+**Example scenarios:**
+```
+Context: Understanding complex method call chains
+Use: prepareCallHierarchy + incomingCalls + outgoingCalls
+Get: Full picture of method relationships
 ```
 
 ## The LSP Tool
