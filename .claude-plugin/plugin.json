@@ -1,6 +1,9 @@
 {
   "name": "ruby-lsp",
-  "version": "1.0.0",
-  "description": "Ruby LSP integration for Claude Code",
-  "lspServers": "./.lsp.json"
+  "version": "1.1.0",
+  "description": "Ruby LSP integration with proactive SessionStart hook that guides Claude on when and how to use the 9 LSP operations for semantic code intelligence",
+  "lspServers": "./.lsp.json",
+  "skills": [
+    "./ruby-lsp"
+  ]
 }

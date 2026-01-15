@@ -1,0 +1,29 @@
+{
+  "description": "Ruby LSP guidance hooks - provides Claude with comprehensive guidance on when and how to use LSP tools for Ruby development",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PLUGIN_ROOT/hooks/scripts/check-read-rb.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PLUGIN_ROOT/hooks/scripts/session-end-cleanup.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
