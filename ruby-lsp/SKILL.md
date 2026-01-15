@@ -1,6 +1,6 @@
 ---
 name: ruby-lsp
-description: This skill should be loaded when working with Ruby files to understand when to use LSP operations (documentSymbol, findReferences, goToDefinition, hover, workspaceSymbol, incomingCalls, outgoingCalls) versus standard tools (Read, Grep). Critical for preventing unnecessary file reads when structural information is needed.
+description: This skill should be loaded when working with Ruby files to understand when to use LSP operations (documentSymbol, findReferences, goToDefinition, hover) versus standard tools (Read, Grep). Critical for preventing unnecessary file reads when structural information is needed.
 ---
 
 # Ruby LSP Usage Guidance
@@ -11,53 +11,75 @@ This project has Ruby LSP (shopify/ruby-lsp) integration enabled. Use the LSP to
 
 **BEFORE Reading Any Ruby File**, determine what information is needed:
 
+**Need file structure overview?** → **documentSymbol** ✅
 **Need to know what methods exist?** → **documentSymbol** ✅
+**Need method signatures?** → **documentSymbol + Read** ✅ (NOT hover - doesn't work on definitions)
 **Need to understand class/module structure?** → **documentSymbol** ✅
-**Need method signatures or parameters?** → **hover** ✅ (NOT documentSymbol - it only gives names)
-**Need to see instance variables?** → **documentSymbol** ✅
-**Need file overview or high-level structure?** → **documentSymbol** ✅
-**Need to find where a method is defined?** → **goToDefinition** ✅
-**Need to see where a method is called?** → **findReferences** ✅
-**Need method documentation?** → **hover** ✅
+**Need to see where a method is defined?** → **goToDefinition** ✅ (from call site)
+**Need to see where a method is used?** → **findReferences** ✅ (very detailed)
+**Need quick signature from call site?** → **hover** ✅ (works on calls, not definitions)
+**Need implementation details?** → **Read** ✅
+**Need to search across project?** → **Grep** ✅ (workspaceSymbol doesn't work)
 
-**Only use Read when:**
-- Need specific implementation details in method bodies
-- Need to see actual code logic
-- Need comments, strings, or non-structural content
-
-**Key Rule:** NEVER use Read to get structural information or method signatures. ALWAYS use LSP operations first.
+**Key Rule:** documentSymbol for structure, Read for content, LSP for navigation.
 
 ## Quick Reference
 
 | What You Need | Use This | NOT This |
 |---------------|----------|----------|
-| List of methods in file | documentSymbol | Read entire file |
-| Method signature with params | hover | Read entire file |
-| Where method is called | findReferences | Grep for method name |
+| File structure overview | documentSymbol | Read entire file |
+| Method signature | documentSymbol + Read | hover on definition (doesn't work) |
 | Where method is defined | goToDefinition | Grep for "def method" |
-| Find class across project | workspaceSymbol | Glob + Grep |
-| What calls this method | incomingCalls | Grep + manual analysis |
-| What this method calls | outgoingCalls | Read method body |
-| Method documentation | hover | Read file comments |
+| Where method is used | findReferences | Grep for method name |
+| Cross-project search | Grep | workspaceSymbol (broken) |
+| Quick signature from call | hover on call site | Navigate away |
+| Implementation details | Read | documentSymbol (only gives structure) |
 
 ## Common Workflows
 
-### Getting Method Signatures (Most Common Mistake)
+### Getting Method Signatures (The Right Way)
 
-❌ **Wrong - Reading entire file for signatures:**
+CRITICAL: Ruby LSP cannot extract signatures from method definitions.
+
+❌ **BROKEN - Hover on definitions (this will never work):**
 ```
-Task: Get method signatures from generate_briefs.rb
-Step 1: [Uses documentSymbol - gets method list]
-Step 2: [Reads entire 1183-line file] ← WRONG!
+Step 1: documentSymbol → get "initialize" at line 41
+Step 2: hover at line 41 → Returns "No hover information available"
+Why: Hover does NOT support Prism::DefNode (method definitions)
 ```
 
-✅ **Correct - documentSymbol + hover:**
+✅ **CORRECT - documentSymbol + Read:**
 ```
-Task: Get method signatures from generate_briefs.rb
-Step 1: [Uses documentSymbol - gets method list with line numbers]
-Step 2: [Uses hover on each method - gets full signature with parameters]
-Result: Full signatures without reading entire file
+Step 1: documentSymbol on file.rb → get method list:
+  - process_payment at line 145
+  - validate_card at line 167
+  - charge_card at line 189
+
+Step 2: Read file.rb offset=144 limit=5 → see actual def:
+  def process_payment(amount, currency = 'USD', metadata = {})
+    validate_card(metadata[:card])
+    charge_card(amount, currency)
+  end
+
+Result: Full signature without reading entire file
 ```
+
+✅ **ALTERNATIVE - Hover on call site (if you have one):**
+```
+Context: You see `processor.process_payment(100, 'EUR')` at line 89
+Step 1: hover at that call site (on "process_payment")
+Result: Shows signature from definition: process_payment(amount, currency = 'USD', metadata = {})
+Limitation: Requires finding a call site first
+```
+
+### Why Hover Doesn't Work on Definitions
+
+Ruby LSP's ALLOWED_TARGETS:
+- ✅ Prism::CallNode (method calls)
+- ✅ Prism::ConstantReadNode (constants)
+- ❌ Prism::DefNode (method definitions) ← NOT SUPPORTED
+
+This is by design. To get signatures from definitions, use documentSymbol + Read.
 
 ### Understanding File Structure
 
@@ -70,8 +92,14 @@ Assistant: [Reads entire file and manually parses for classes/methods]
 ✅ **Correct:**
 ```
 Task: Understand what's in this Ruby file
-Assistant: [Uses documentSymbol]
-Assistant: [Gets hierarchical structure: classes, modules, methods, instance variables]
+Step 1: documentSymbol → get hierarchical structure
+Result:
+  PaymentProcessor (Class) - Line 10
+    initialize (Constructor) - Line 12
+    process_payment (Method) - Line 145
+    validate_card (Method) - Line 167
+
+Step 2: Read specific methods if needed
 ```
 
 ### Finding Where Methods Are Called
@@ -85,91 +113,92 @@ Assistant: [Uses Grep to search for "process_payment" as text]
 ✅ **Correct:**
 ```
 Task: Find all places where process_payment is called
-Assistant: [Uses findReferences]
-Assistant: [Gets semantic matches - understands Ruby scope and method calls]
+Step 1: goToDefinition or documentSymbol → find method at line 145
+Step 2: findReferences at line 145
+Result: Found 12 references:
+  app/controllers/payments_controller.rb:
+    Line 23:15
+    Line 67:11
+  lib/billing/processor.rb:
+    Line 89:27
+  [... detailed, semantic matches]
 ```
 
-## Detailed Operation Guide with Examples
+## Detailed Operation Guide
 
-### 1. documentSymbol - "What's in this file?"
+### 1. documentSymbol - "What's in this file?" (PRIMARY TOOL)
 
 **Use when you need:**
 - List of all methods in a file
 - Class and module structure
 - Overview before diving deeper
+- Method names with line numbers
 
 **Returns:**
-- Method names (NOT full signatures)
+- Hierarchical structure of all symbols
+- Method names (NOT full signatures - use Read for that)
 - Line numbers for each symbol
-- Hierarchical structure
+- Classes, modules, methods, instance variables
 
-**Example scenarios:**
+**How to use:**
+```
+LSP operation="documentSymbol" filePath="/absolute/path/file.rb" line=1 character=1
+```
+
+**Note:** line/character parameters are required but don't affect results - you always get all symbols.
+
+**Example:**
 ```
 Context: User asks "What methods are available in payment_processor.rb?"
-Step 1: LSP operation="documentSymbol" filePath="/path/payment_processor.rb" line=1 character=1
-Result: Gets list: process_payment, validate_card, charge_card, refund_payment
+
+LSP operation="documentSymbol" filePath="/app/payment_processor.rb" line=1 character=1
+
+Returns:
+  PaymentProcessor (Class) - Line 10
+    initialize (Constructor) - Line 12
+    process_payment (Method) - Line 145
+    validate_card (Method) - Line 167
+    charge_card (Method) - Line 189
 ```
 
-```
-Context: Need to understand a new file before modifying it
-Step 1: LSP operation="documentSymbol" to see all classes and methods
-Step 2: Use hover on interesting methods to learn more
-Step 3: Use Read only if need to see implementation
-```
+**Follow-up:** Use Read with offset/limit to see specific method signatures.
 
-### 2. hover - "What's the signature? What does this do?"
-
-**Use when you need:**
-- Full method signature with parameters
-- Method documentation
-- Parameter types and return values
-
-**Returns:**
-- Complete signature: `def method_name(param1, param2, options = {})`
-- Documentation comments
-- Parameter info
-
-**Example scenarios:**
-```
-Context: After documentSymbol shows process_payment exists, need to know how to call it
-Step 1: LSP operation="documentSymbol" (got line number: 45)
-Step 2: LSP operation="hover" filePath="/path/file.rb" line=45 character=1
-Result: Full signature with all parameters
-```
-
-```
-Context: About to call a method, need to know what parameters it expects
-Use: hover on the method definition
-Get: def process_payment(amount, currency = 'USD', metadata = {})
-```
-
-### 3. findReferences - "Where is this used?"
+### 2. findReferences - "Where is this used?"
 
 **Use when you need:**
 - All places a method is called
-- All uses of a class or variable
+- All uses of a class or constant
 - Impact analysis before refactoring
 
 **Returns:**
 - Every location where symbol is referenced
+- Very detailed output with file paths and line numbers
 - Semantic matches (not string search)
+
+**How to use:**
+```
+Context: Want to find all usages of log method at line 259
+LSP operation="findReferences" filePath="/path/file.rb" line=259 character=7
+
+Returns: Found 48 references across 3 files:
+  lib/journeys/brief_writer.rb:
+    Line 109:11
+    Line 117:7
+  scripts/generate_briefs.rb:
+    Line 143:27
+    Line 153:27
+  [... comprehensive list]
+```
 
 **Example scenarios:**
 ```
 Context: About to rename or refactor process_payment method
-Step 1: LSP operation="goToDefinition" to find definition
-Step 2: LSP operation="findReferences" at definition location
-Result: All 23 call sites across project
+Step 1: documentSymbol or goToDefinition → find definition location
+Step 2: findReferences at definition location
+Result: All call sites across project for impact analysis
 ```
 
-```
-Context: User asks "Where is validate_card called?"
-Use: findReferences at the method definition
-Get: All call sites with file paths and line numbers
-NOT: Grep search that would also match string literals
-```
-
-### 4. goToDefinition - "Where is this defined?"
+### 3. goToDefinition - "Where is this defined?"
 
 **Use when you need:**
 - Jump to where method/class is defined
@@ -180,260 +209,188 @@ NOT: Grep search that would also match string literals
 - Exact file path and line number of definition
 - Works with inheritance and mixins
 
+**How to use:**
+```
+Context: Line 143 has `log(msg)` call, need to see implementation
+LSP operation="goToDefinition" filePath="/path/file.rb" line=143 character=27
+
+Returns: Defined in scripts/generate_briefs.rb:259:7
+```
+
 **Example scenarios:**
 ```
 Context: Looking at code that calls User.authenticate, need to see how it's implemented
-Step 1: LSP operation="goToDefinition" on authenticate call site
+Step 1: goToDefinition on authenticate call site
 Result: Jumps to exact definition, even if in parent class or mixin
 ```
 
+**Don't use Grep** to search for "def method_name" - goToDefinition understands inheritance.
+
+### 4. hover - "What does this call/constant do?" (LIMITED USE)
+
+**CRITICAL:** Hover is a LIMITED tool in Ruby. It works on usage sites, not definitions.
+
+**Works on:**
+- ✅ Method calls: `user.save` → shows signature
+- ✅ Constants: `PaymentProcessor` → shows class definition
+- ✅ Variables: `@user`, `@@class_var`, `$global` → shows where defined
+- ✅ Keywords: `super`, `yield`
+
+**Does NOT work on:**
+- ❌ Method definitions: `def save` → no response
+- ❌ Local variables
+- ❌ Method parameters
+- ❌ Most other Ruby syntax
+
+**When to use:**
+Reading code and encounter a method call to something defined in another file. Hover gives you quick signature without navigating away.
+
+**Example - The actual use case:**
 ```
-Context: User asks "Where is the charge_card method defined?"
-Use: goToDefinition (don't use Grep to search for "def charge_card")
-Get: Exact location, including inherited methods from superclasses
-```
+Context: You're reading payment_processor.rb and see:
+  validator.check_amount(amount)
 
-### 5. workspaceSymbol - "Find this across entire project"
+You want to know check_amount's signature without navigating to validator.rb
 
-**Use when you need:**
-- Find classes/methods across whole codebase
-- Locate symbol without knowing which file
-- Broad search for symbols
+LSP operation="hover" filePath="/app/payment_processor.rb" line=24 character=15
 
-**Returns:**
-- Matching symbols from entire workspace
-
-**Example scenarios:**
-```
-Context: User asks "Where is the PaymentProcessor class?"
-Use: workspaceSymbol with query "PaymentProcessor"
-Get: All matching classes across project
-NOT: Glob + Grep combination
-```
-
-```
-Context: Need to find all payment-related classes
-Use: workspaceSymbol with query "payment"
-Get: PaymentProcessor, PaymentGateway, PaymentMethod, etc.
-```
-
-### 6. goToImplementation - "What implements this?"
-
-**Use when you need:**
-- Find concrete implementations of abstract method
-- See all subclass implementations
-- Navigate from interface to implementation
-
-**Example scenarios:**
-```
-Context: Looking at abstract process method, need to see actual implementations
-Use: goToImplementation on abstract method
-Get: All concrete implementations in subclasses
+Returns:
+  check_amount(amount, options = {})
+  Definition: lib/validators/amount_validator.rb:45
+  Documentation: [if any exists]
 ```
 
-### 7. incomingCalls - "What calls this method?"
+This is useful but narrow - not a primary workflow tool.
 
-**Use when you need:**
-- Understand dependencies on a method
-- See who calls this ("who calls me?")
-- Analyze impact before changes
+**When NOT to use:**
+- Getting signatures from method definitions → Use documentSymbol + Read
+- Primary code exploration → Use documentSymbol
+- Understanding file structure → Use documentSymbol
 
-**Example scenarios:**
-```
-Context: About to change process_payment signature, need to know all callers
-Use: incomingCalls on process_payment definition
-Get: All methods that call process_payment
-```
+**Why hover is secondary:**
+- Requires being at a specific call site
+- Doesn't work on definitions (the most common need)
+- documentSymbol + Read is more direct for most use cases
 
-```
-Context: User asks "What calls the validate_card method?"
-Use: incomingCalls (not findReferences - more structured for method calls)
-Get: Organized list of caller methods with context
-```
+## How to Use LSP Operations
 
-### 8. outgoingCalls - "What does this method call?"
+LSP operations don't require line/character precision for most use cases:
 
-**Use when you need:**
-- See method dependencies ("what do I call?")
-- Understand method flow
-- Analyze downstream impact
+**documentSymbol:**
+- Call it on any Ruby file
+- Returns all symbols with line numbers
+- line/character parameters required but don't affect results
+- Always returns complete symbol tree
 
-**Example scenarios:**
-```
-Context: Need to understand what process_payment depends on
-Use: outgoingCalls on process_payment
-Get: List of methods it calls: validate_card, charge_card, send_receipt
-```
+**goToDefinition:**
+- Use from a call site or reference
+- Navigate to where symbol is defined
+- Works semantically (understands inheritance)
 
-```
-Context: Analyzing method to understand its behavior before modifying
-Step 1: hover to see signature
-Step 2: outgoingCalls to see what it calls
-Step 3: incomingCalls to see who calls it
-Result: Complete understanding without reading implementation
-```
+**findReferences:**
+- Use from a definition
+- Get all usages across entire project
+- Returns very detailed output
 
-### 9. prepareCallHierarchy - "Show me the call chain"
+**hover:**
+- Use when at a method call or constant reference
+- Works on the usage site, not the definition
+- Limited use cases - prefer documentSymbol + Read for getting signatures
 
-**Use when you need:**
-- Understand call hierarchy
-- See method call relationships
-- Analyze call chains
+## Available LSP Operations
 
-**Example scenarios:**
-```
-Context: Understanding complex method call chains
-Use: prepareCallHierarchy + incomingCalls + outgoingCalls
-Get: Full picture of method relationships
-```
+Ruby LSP in Claude Code has 4 useful operations:
 
-## The LSP Tool
-
-The LSP tool is a first-class tool (like Read, Bash, Edit) that provides semantic code intelligence for Ruby files. All operations require three parameters:
-- **filePath**: Absolute path to the Ruby file
-- **line**: Line number (1-indexed, as shown in editors)
-- **character**: Character position (1-indexed, as shown in editors)
-
-## Available LSP Operations (9 Total)
-
-### 1. goToDefinition
-**Find where a symbol is defined**
-- Use when: Need to find where classes, modules, methods, variables are defined
-- Supports: Classes, modules, methods (including inherited), singleton methods, instance variables, local variables, super keyword
-- Why use: Understands Ruby scope, inheritance, and mixins - provides exact locations even for inherited methods
-- ❌ Don't use Grep to search for "def method_name" or "class ClassName"
-
-### 2. hover
-**Get hover information (documentation, type info)**
-- Use when: Need to view method signatures, parameter info, documentation, source code preview
-- Supports: Methods, constants, instance variables (including inherited), Ruby core classes/methods
-- Why use: Provides formatted docs with parameter info, works with Ruby core methods
-- ❌ Don't use Read + manual parsing to find method definition
-
-### 3. documentSymbol
+### 1. documentSymbol (PRIMARY - Always Reliable)
 **Get all symbols in a document**
 - Use when: Need to understand file structure (classes, modules, methods)
-- Returns: Hierarchical symbol tree of all classes, modules, methods in file
-- Why use: Provides structured, hierarchical view instantly
-- ❌ Don't use Read + manual parsing for classes/methods
+- Returns: Hierarchical symbol tree with line numbers
+- Why use: Always works, provides structured view instantly
+- ❌ Don't use Read + manual parsing for structure
 
-### 4. workspaceSymbol
-**Search for symbols across workspace**
-- Use when: Need to find classes, modules, methods across entire project
-- Returns: Matching symbols from entire workspace
-- Why use: LSP indexes the entire workspace and understands Ruby structure
-- ❌ Don't use Glob + Grep for class/method definitions
-
-### 5. findReferences
+### 2. findReferences (Extremely Useful)
 **Find all references to a symbol**
-- Use when: Need to see where methods/classes are used across the project
-- Returns: All locations where symbol is referenced
+- Use when: Need to see where methods/classes are used across project
+- Returns: All locations where symbol is referenced (very detailed)
 - Why use: Understands Ruby semantics, not just text matches
 - ❌ Don't use Grep to search for method name strings
 
-### 6. goToImplementation
-**Find implementations of an interface or abstract method**
-- Use when: Working with abstract methods or interfaces, need to find concrete implementations
-- Returns: File paths and positions of implementations
-- Why use: Semantic understanding of Ruby class hierarchies
+### 3. goToDefinition (Navigation)
+**Find where a symbol is defined**
+- Use when: Need to find where classes, modules, methods are defined
+- Supports: Works with inheritance and mixins
+- Why use: Understands Ruby scope, provides exact locations
+- ❌ Don't use Grep to search for "def method_name"
 
-### 7. prepareCallHierarchy
-**Get call hierarchy item at a position**
-- Use when: Need to understand the call structure of functions/methods
-- Returns: Call hierarchy item for the function at position
-- Why use: Provides context for method call chains
-
-### 8. incomingCalls
-**Find all functions/methods that call the function at a position**
-- Use when: Need to see what calls this method ("who calls me?")
-- Returns: List of callers for the method
-- Why use: Understand method usage and dependencies
-
-### 9. outgoingCalls
-**Find all functions/methods called by the function at a position**
-- Use when: Need to see what this method calls ("what do I call?")
-- Returns: List of methods called by this method
-- Why use: Understand method dependencies and flow
+### 4. hover (SECONDARY - Limited Use Cases)
+**Get information from call sites and constants**
+- Use when: Looking at a method call or constant reference and need quick info
+- Works on: Method CALLS (not definitions), constants, variables
+- Does NOT work on: Method definitions, local variables, most syntax
+- Why limited: Only works on specific node types (CallNode, ConstantReadNode)
+- ❌ Don't use for method signatures from definitions (use documentSymbol + Read)
 
 ## When to Use LSP (ALWAYS PREFER LSP)
 
 **Use LSP operations proactively when:**
 
-1. **Finding method/class definitions** → Use `goToDefinition`
-2. **Understanding method signatures and parameters** → Use `hover`
-3. **Understanding file structure** → Use `documentSymbol`
-4. **Searching for symbols across entire project** → Use `workspaceSymbol`
-5. **Finding where a method/class is used** → Use `findReferences`
-6. **Finding implementations** → Use `goToImplementation`
-7. **Understanding who calls a method** → Use `incomingCalls`
-8. **Understanding what a method calls** → Use `outgoingCalls`
-9. **Analyzing call chains** → Use `prepareCallHierarchy`
+1. **Understanding file structure** → Use `documentSymbol`
+2. **Finding method/class definitions** → Use `goToDefinition`
+3. **Finding where a method/class is used** → Use `findReferences`
+4. **Getting quick info from call sites** → Use `hover` (limited)
 
 ## When NOT to Use LSP (Use Standard Tools)
 
 **Use standard tools when:**
 
-1. **Reading full file contents** → Use Read tool (LSP only returns symbol info)
-2. **Searching across multiple files for text patterns** → Use Grep tool (not symbol-specific)
-3. **Editing or writing files** → Use Edit or Write tools (LSP is read-only)
+1. **Reading full file contents** → Use Read (LSP only returns symbol info)
+2. **Searching across multiple files for text patterns** → Use Grep (not symbol-specific)
+3. **Editing or writing files** → Use Edit or Write (LSP is read-only)
 4. **Non-Ruby files** → Use standard tools (LSP only works with .rb files)
-5. **Finding string literals or comments** → Use Grep tool (text search, not semantic)
-6. **Understanding project structure (directories, file organization)** → Use Glob, Bash (file system navigation)
-7. **Checking for syntax errors** → Use Bash with `ruby -c` (LSP doesn't provide diagnostics endpoint in Claude Code)
-
-## How to Invoke LSP Operations
-
-**Always provide all three required parameters:**
-
-```
-LSP operation="goToDefinition" filePath="/path/to/file.rb" line=10 character=15
-LSP operation="hover" filePath="/path/to/file.rb" line=20 character=8
-LSP operation="documentSymbol" filePath="/path/to/file.rb" line=1 character=1
-LSP operation="workspaceSymbol" filePath="/path/to/file.rb" line=1 character=1
-LSP operation="findReferences" filePath="/path/to/file.rb" line=15 character=10
-```
-
-**Note:** For operations like `documentSymbol` and `workspaceSymbol`, the exact line/character position is less critical, but all parameters are still required.
+5. **Finding string literals or comments** → Use Grep (text search, not semantic)
+6. **Understanding project structure (directories, file organization)** → Use Glob, Bash
+7. **Getting method signatures from definitions** → Use documentSymbol + Read (hover doesn't work on defs)
 
 ## Example Workflows
 
 ### Task: Understand and modify a Ruby method
 
-1. ✅ Use `documentSymbol` - Get file structure overview
-2. ✅ Use `workspaceSymbol` - Find method across project if not in current file
-3. ✅ Use `goToDefinition` - Jump to exact method definition
-4. ✅ Use `hover` - Understand method signature and docs
-5. ✅ Use Read - Get full file content for context
-6. ✅ Use `findReferences` - See where method is used
-7. ✅ Use `incomingCalls` - See what calls this method
-8. ✅ Use `outgoingCalls` - See what this method calls
-9. ✅ Use Edit - Make the changes
-10. ✅ Use `findReferences` again - Verify impact of changes
+1. ✅ documentSymbol - Get file structure with line numbers
+2. ✅ Read relevant lines - See method definitions and signatures
+3. ✅ findReferences - See where method is used (impact analysis)
+4. ✅ goToDefinition - Navigate to related methods if needed
+5. ✅ Edit - Make changes
+6. ✅ findReferences again - Verify all call sites are still valid
 
 ### Task: Navigate unfamiliar Ruby codebase
 
-1. ✅ Use `workspaceSymbol` - Search for relevant classes/methods
-2. ✅ Use `goToDefinition` - Jump to definitions
-3. ✅ Use `hover` - Read documentation
-4. ✅ Use `documentSymbol` - Understand file structure
-5. ✅ Use `findReferences` - See how symbols are used
-6. ✅ Use `incomingCalls`/`outgoingCalls` - Understand call chains
+1. ✅ documentSymbol - Get structure of current file
+2. ✅ goToDefinition - Jump from calls to definitions
+3. ✅ findReferences - See how symbols are used
+4. ✅ Read - Examine implementation details when needed
 
 ### Task: Refactor a method safely
 
-1. ✅ Use `hover` - Understand current method signature
-2. ✅ Use `findReferences` - Find all usages before changing
-3. ✅ Use `incomingCalls` - See all callers
-4. ✅ Use Edit - Make the refactoring changes
-5. ✅ Use `findReferences` - Verify all call sites are updated
+1. ✅ documentSymbol - Find method in current file
+2. ✅ findReferences - Find all usages before changing (detailed output)
+3. ✅ Read - Review implementation
+4. ✅ Edit - Make refactoring changes
+5. ✅ findReferences - Verify all call sites are updated
+
+### Task: Quick lookup while reading code
+
+1. ✅ Reading file, encounter `validator.check_amount(amount)`
+2. ✅ hover on check_amount - Get signature without navigating
+3. Continue reading with context
 
 ## Best Practices
 
-1. **Navigate with LSP** - Use `goToDefinition` instead of searching for method definitions
-2. **Understand with hover** - Use `hover` before modifying method calls to see signatures
-3. **Verify with references** - Use `findReferences` before and after refactoring
-4. **Combine with Read** - Use LSP for structure and navigation, Read for full content
-5. **Provide exact positions** - LSP operations require accurate line and character positions
-6. **Fall back gracefully** - If LSP calls fail, fall back to standard tools (Read, Grep)
+1. **Start with documentSymbol** - Always get the structure first
+2. **Use Read for signatures** - Don't try to hover on definitions
+3. **Use hover sparingly** - Only when at call sites needing quick lookup
+4. **Navigate with goToDefinition** - Not Grep searches
+5. **Verify with findReferences** - Before and after refactoring (very detailed)
+6. **Combine tools** - documentSymbol + Read + findReferences is the core workflow
+7. **Fall back gracefully** - If LSP calls fail, use standard tools (Read, Grep)
 
-Proactively use these 9 LSP operations throughout your Ruby development workflow for semantic code intelligence.
+Proactively use these 4 LSP operations throughout your Ruby development workflow for semantic code intelligence.
